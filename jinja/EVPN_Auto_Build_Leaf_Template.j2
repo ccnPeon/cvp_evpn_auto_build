@@ -1,0 +1,101 @@
+service routing protocols model multi-agent
+!
+ip routing
+!
+{% for interface in point_to_point_links %}
+interface {{ interface }}
+ no switchport
+ mtu 9214
+ ip address {{ point_to_point_links[interface] }}
+!
+{% endfor %}
+{% for interface in mlag_port_channel_ports %}
+interface {{ interface }}
+ description MLAGPEERLINK MEMBER
+ channel-group 1000 mode active
+!
+{% endfor %}
+vlan 4093
+ name UNDERLAY_MLAG_BGP_PEER
+vlan 4094
+ name MLAGPEER
+ trunk group MLAGPEER
+!
+no spanning-tree vlan 4094
+!
+interface vlan4093
+ ip address {{ mlag_info['bgp_local_address'] }}/31
+ no autostate
+!
+interface vlan4094
+ ip address {{ mlag_info['local_address'] }}/31
+ no autostate
+!
+interface Loopback0
+ description Loopback for Underlay
+ ip address {{ loopback_ip }}/32
+!
+interface Loopback1
+ description Loopback for VTEP
+ ip address {{ vtep_ip }}/32
+!
+interface vxlan1
+ vxlan vlan 10-100 vni 10010-10100
+ vxlan source-interface Loopback1
+!
+mlag configuration
+ domain-id {{ mlag_info['domain_id'] }}
+ peer-link Port-Channel 1000
+ local-interface vlan 4094
+ peer-address {{ mlag_info['peer_address'] }}
+!
+interface Port-Channel1000
+ description MLAGPEERLINK
+ switchport mode trunk
+ switchport trunk group MLAGPEER
+!
+ip prefix-list LOOPBACKS_ONLY
+ seq 10 permit {{ loopback_ip }}/32
+ seq 20 permit {{ vtep_ip }}/32
+!
+route-map BGP_CONNECTED_LOOPBACKS permit 10
+  match ip address prefix-list LOOPBACKS_ONLY
+!
+router bgp {{ bgp_as }}
+   router-id {{ loopback_ip }}
+   no bgp default ipv4-unicast
+   maximum-paths 4 ecmp 4
+   neighbor OVERLAY_PEERS peer-group
+   neighbor OVERLAY_PEERS update-source Loopback0
+   neighbor OVERLAY_PEERS ebgp-multihop 2
+   neighbor OVERLAY_PEERS send-community extended
+   neighbor OVERLAY_PEERS password 0 {{ bgp_password }}
+   neighbor OVERLAY_PEERS maximum-routes 0
+   neighbor OVERLAY_PEERS remote-as {{ bgp_as_start }}
+   neighbor UNDERLAY_PEERS peer-group
+   neighbor UNDERLAY_PEERS send-community extended
+   neighbor UNDERLAY_PEERS remote-as {{ bgp_as_start }}
+   neighbor UNDERLAY_PEERS password 0 {{ bgp_password }}
+   neighbor UNDERLAY_PEERS maximum-routes 0 
+   neighbor UNDERLAY_MLAG_PEER peer-group
+   neighbor UNDERLAY_MLAG_PEER send-community extended
+   neighbor UNDERLAY_MLAG_PEER remote-as {{ bgp_as }}
+   neighbor UNDERLAY_MLAG_PEER password 0 {{ bgp_password }}
+   neighbor UNDERLAY_MLAG_PEER maximum-routes 0 
+   neighbor UNDERLAY_MLAG_PEER next-hop-self
+{% for neighbor in bgp_underlay_neighbors %}
+   neighbor {{ neighbor }} peer-group UNDERLAY_PEERS
+{% endfor %}
+{% for neighbor in bgp_overlay_neighbors %}
+   neighbor {{ neighbor }} peer-group OVERLAY_PEERS
+{% endfor %}
+   neighbor {{ mlag_info['bgp_peer_address'] }} peer-group UNDERLAY_MLAG_PEER
+   !
+   redistribute connected route-map BGP_CONNECTED_LOOPBACKS
+   !
+   address-family evpn
+      neighbor OVERLAY_PEERS activate
+   !
+   address-family ipv4
+      neighbor UNDERLAY_PEERS activate
+      neighbor UNDERLAY_MLAG_PEER activate

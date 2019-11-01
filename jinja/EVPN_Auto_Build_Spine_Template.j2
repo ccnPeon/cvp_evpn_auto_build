@@ -1,0 +1,49 @@
+service routing protocols model multi-agent
+!
+ip routing
+!
+{% for interface in point_to_point_links %}
+interface {{ interface }}
+ no switchport
+ mtu 9214
+ ip address {{ point_to_point_links[interface] }}
+!
+{% endfor %}
+interface Loopback0
+   description Loopback for Underlay
+   ip address {{ loopback_ip }}/32
+!
+peer-filter DC_ID_{{ dc_id }}
+   10 match as-range {{ bgp_as_start }}-{{ bgp_as_start + 99 }} result accept
+!
+ip prefix-list LOOPBACKS_ONLY
+ seq 10 permit {{ loopback_ip }}/32
+!
+route-map BGP_CONNECTED_LOOPBACKS permit 10
+  match ip address prefix-list LOOPBACKS_ONLY
+!
+router bgp {{ bgp_as }}
+   router-id {{ loopback_ip }}
+   no bgp default ipv4-unicast
+   maximum-paths 4 ecmp 4
+{% for interface in point_to_point_links %}
+   bgp listen range {{ point_to_point_links[interface][:-3] }}/31 peer-group UNDERLAY_PEERS peer-filter DC_ID_{{ dc_id }}
+{% endfor %}
+   bgp listen range {{ overlay_listen_range }} peer-group OVERLAY_PEERS peer-filter DC_ID_{{ dc_id }}
+   neighbor OVERLAY_PEERS peer-group
+   neighbor OVERLAY_PEERS update-source Loopback0
+   neighbor OVERLAY_PEERS ebgp-multihop 2
+   neighbor OVERLAY_PEERS send-community extended
+   neighbor OVERLAY_PEERS password 0 {{ bgp_password }}
+   neighbor OVERLAY_PEERS maximum-routes 0 
+   neighbor UNDERLAY_PEERS peer-group
+   neighbor UNDERLAY_PEERS send-community extended
+   neighbor UNDERLAY_PEERS password 0 {{ bgp_password }}
+   neighbor UNDERLAY_PEERS maximum-routes 0 
+   redistribute connected route-map BGP_CONNECTED_LOOPBACKS
+   !
+   address-family evpn
+      neighbor OVERLAY_PEERS activate
+   !
+   address-family ipv4
+      neighbor UNDERLAY_PEERS activate
